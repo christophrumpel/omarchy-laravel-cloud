@@ -115,8 +115,8 @@ list of what this one touches:
   as `origin`. Nothing is ever fetched, committed or pushed there.
 - **Sends** desktop notifications via `notify-send` and opens URLs via
   `xdg-open`.
-- **Does not** use `sudo`, modify your Omarchy or Hyprland configuration, or
-  bundle binaries. It is a handful of Bash scripts plus QML.
+- **Does not** need root privileges, modify your Omarchy or Hyprland
+  configuration, or bundle binaries. It is a handful of Bash scripts plus QML.
 
 Deploying is a real action against your production infrastructure. The
 two-click arm/confirm on the rocket button is the only safeguard.
