@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "christophrumpel.laravel-cloud",
+  "name": "Laravel Cloud",
+  "version": "1.0.0",
+  "author": "Christoph Rumpel",
+  "license": "MIT",
+  "description": "Laravel Cloud applications, environments and deployments in the Omarchy bar. Deploy, watch and open your apps without leaving the desktop.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Laravel Cloud",
+    "description": "See your Laravel Cloud apps and their latest deployments, trigger deploys, open sites and the dashboard.",
+    "category": "Dev",
+    "aliases": [
+      "laravel-cloud"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "deployPollSec": 10,
+      "cloudBin": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "deployPollSec",
+        "type": "integer",
+        "label": "Poll interval while deploying (seconds)",
+        "min": 5,
+        "max": 120,
+        "step": 5,
+        "defaultValue": 10
+      },
+      {
+        "key": "cloudBin",
+        "type": "path",
+        "label": "Path to the cloud CLI",
+        "defaultValue": "",
+        "description": "Leave empty to auto-detect (PATH, then Composer's global vendor/bin)."
+      }
+    ]
+  }
+}

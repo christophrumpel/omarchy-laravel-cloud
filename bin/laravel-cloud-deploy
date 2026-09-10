@@ -1,0 +1,64 @@
+#!/bin/bash
+# Deploy one environment, wait for it to finish, then notify and refresh the
+# bar widget.
+# Usage: laravel-cloud-deploy <app-name> <env-name> <env-id> [app-slug] [repositoryFullName] [tokenIndex]
+#
+# Runs detached from the shell process, so a plugin hot-reload mid-deploy does
+# not lose the notification.
+
+source "$(dirname "$(readlink -f "$0")")/laravel-cloud-lib"
+
+APP=${1:?app name}
+ENV=${2:?environment name}
+ENV_ID=${3:-}
+SLUG=${4:-$APP}
+REPO=${5:-}
+use_token_index "${6:-}"
+LOG="$STATE_DIR/deploy-$(slugify "$SLUG")-$(slugify "$ENV").log"
+
+notify() {
+  notify-send -a "Laravel Cloud" -u "${3:-normal}" "$1" "$2" 2>/dev/null || true
+}
+
+finish() {
+  [[ -n $ENV_ID ]] && widget_ipc deployFinished "$ENV_ID"
+  widget_ipc refresh
+}
+
+[[ -n $CLOUD_BIN ]] || { notify "Deploy failed" "cloud CLI not found" critical; finish; exit 1; }
+
+cd "$(app_workdir "$SLUG" "$REPO")" || { notify "Deploy failed" "could not prepare work directory" critical; finish; exit 1; }
+
+notify "Deploying $APP" "Environment: $ENV" low
+widget_ipc refresh
+
+run_cloud deploy "$APP" "$ENV" --no-ansi >"$LOG" 2>&1
+status=$?
+
+# The CLI prints one JSON line per status change; an early error is a single
+# {"error":true,...} line.
+if error_msg=$(grep -m1 '"error":true' "$LOG" | jq -r '.message // empty' 2>/dev/null) && [[ -n $error_msg ]]; then
+  notify "Deploy failed: $APP" "$error_msg" critical
+  finish
+  exit 1
+fi
+
+deploy_status=""; failure=""
+if [[ -n $ENV_ID ]]; then
+  state=$(run_cloud deployment:list "$ENV_ID" --json --fields=status,failureReason 2>/dev/null \
+    | jq -r '.[0] | "\(.status // "unknown")|\(.failureReason // "")"' 2>/dev/null)
+  deploy_status=${state%%|*}
+  failure=${state#*|}
+fi
+
+if [[ $deploy_status == *succeeded* ]] || { [[ -z $deploy_status ]] && (( status == 0 )); }; then
+  notify "Deployed $APP" "$ENV is live." normal
+elif [[ $deploy_status == *fail* ]] || (( status != 0 )); then
+  reason=${failure:-$(grep -o '"message":"[^"]*"' "$LOG" | tail -n1 | cut -d'"' -f4)}
+  notify "Deploy failed: $APP" "$ENV — ${reason:-see $LOG}" critical
+else
+  notify "Deploy of $APP" "$ENV: ${deploy_status:-finished}" normal
+fi
+
+finish
+exit $status

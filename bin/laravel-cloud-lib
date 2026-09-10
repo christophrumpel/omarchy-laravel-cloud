@@ -1,0 +1,123 @@
+#!/bin/bash
+# Shared helpers for the Laravel Cloud bar widget scripts. Sourced, not executed.
+#
+# Everything talks to Laravel Cloud through the official `cloud` CLI. Nothing
+# here reads or stores credentials beyond what the CLI itself keeps in
+# ~/.config/cloud/config.json; tokens are only ever handed to the CLI through
+# the LARAVEL_CLOUD_TOKEN environment variable it documents.
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/laravel-cloud"
+mkdir -p "$STATE_DIR"
+
+# The CLI hard-codes this location (see ConfigRepository in laravel/cloud-cli);
+# it does not honour XDG_CONFIG_HOME.
+CLOUD_CONFIG="$HOME/.config/cloud/config.json"
+
+PLUGIN_ID="christophrumpel.laravel-cloud"
+
+resolve_cloud() {
+  local candidate
+  for candidate in \
+    "${LARAVEL_CLOUD_BIN:-}" \
+    "$(command -v cloud 2>/dev/null)" \
+    "$HOME/.config/composer/vendor/bin/cloud" \
+    "$HOME/.composer/vendor/bin/cloud"; do
+    if [[ -n $candidate && -x $candidate ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+CLOUD_BIN=$(resolve_cloud)
+
+# How to invoke the CLI. The phar's requirement checker refuses to start when
+# PHP lacks the iconv extension; loading it on the command line fixes that.
+CLOUD_CMD=()
+if [[ -n $CLOUD_BIN ]]; then
+  if "$CLOUD_BIN" --version >/dev/null 2>&1; then
+    CLOUD_CMD=("$CLOUD_BIN")
+  elif php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
+    CLOUD_CMD=(php -d extension=iconv "$CLOUD_BIN")
+  else
+    CLOUD_CMD=("$CLOUD_BIN")
+  fi
+fi
+
+# Tokens the CLI has stored, one per organization. Prints nothing when the
+# user has never run `cloud auth`.
+stored_tokens() {
+  [[ -f $CLOUD_CONFIG ]] || return 0
+  jq -r '.api_tokens // [] | .[] | select(type == "string")' "$CLOUD_CONFIG" 2>/dev/null
+}
+
+stored_token_count() {
+  stored_tokens | grep -c .
+}
+
+# Pin the CLI to one stored token by its position in the config file. The
+# status snapshot records the position for every app so deploy actions from
+# the panel can address the right organization without passing secrets around.
+# LARAVEL_CLOUD_TOKEN set by the user always wins.
+use_token_index() {
+  local index=${1:-}
+  [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]] && return 0
+  [[ $index =~ ^[0-9]+$ ]] || return 0
+  local token
+  token=$(stored_tokens | sed -n "$((index + 1))p")
+  [[ -n $token ]] && export LARAVEL_CLOUD_TOKEN="$token"
+  return 0
+}
+
+# Run a cloud command non-interactively. Stdin is closed so the CLI can never
+# wait for a prompt; CLOUD_TIMEOUT (seconds, 0 = none) bounds calls that must
+# not hang. On failure the CLI's stderr is folded into stdout, so
+# `out=$(run_cloud ...) || echo "$out"` shows the reason (the CLI reports
+# errors as {"error":true,"message":...} lines on stderr).
+run_cloud() {
+  local err status
+  err=$(mktemp)
+  timeout "${CLOUD_TIMEOUT:-0}" "${CLOUD_CMD[@]}" "$@" -n </dev/null 2>"$err"
+  status=$?
+  if (( status != 0 )); then cat "$err"; else cat "$err" >&2; fi
+  rm -f "$err"
+  return $status
+}
+
+# First error message in a CLI response, whatever its shape.
+cloud_error_message() {
+  local msg
+  msg=$(jq -r 'if type == "object" then (.message // empty) else empty end' <<<"$1" 2>/dev/null | head -n1)
+  [[ -n $msg ]] || msg=$(grep -v '^\s*$' <<<"$1" | tail -n 3 | tr -s '[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')
+  printf '%s' "$msg"
+}
+
+# `cloud deploy` and `cloud deploy:monitor` refuse to run unless the current
+# directory has a Git remote; the deploy itself is driven purely by the
+# application/environment arguments. Keep a tiny per-app Git stub with the
+# app's repository as origin so the widget can deploy from anywhere.
+# Usage: app_workdir <app-slug> [repositoryFullName]  → prints the directory
+app_workdir() {
+  local slug=${1:?app slug} repo=${2:-} dir="$STATE_DIR/repos/${1//\//_}"
+  local remote="https://github.com/${repo:-laravel-cloud/$slug}.git"
+  mkdir -p "$dir"
+  if [[ ! -d $dir/.git ]]; then
+    git -C "$dir" init -q 2>/dev/null
+  fi
+  if ! git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    git -C "$dir" remote add origin "$remote" 2>/dev/null
+  elif [[ -n $repo && $(git -C "$dir" remote get-url origin) != "$remote" ]]; then
+    git -C "$dir" remote set-url origin "$remote" 2>/dev/null
+  fi
+  printf '%s' "$dir"
+}
+
+# Turn an arbitrary name into something safe for a file name.
+slugify() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+widget_ipc() {
+  omarchy-shell -q "$PLUGIN_ID" "$@" 2>/dev/null || true
+}

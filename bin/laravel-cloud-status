@@ -1,0 +1,122 @@
+#!/bin/bash
+# Print a compact JSON snapshot of every Laravel Cloud application, its
+# environments and each environment's latest deployment. The snapshot is also
+# cached in the state dir so the panel can paint instantly after a shell start.
+#
+# When the CLI holds tokens for several organizations, every organization is
+# queried and the apps are merged; each app carries the position of the token
+# it belongs to (tokenIndex) so later actions can address the same organization.
+#
+# Output shape:
+#   { "fetchedAt": iso, "error": null|string, "code": null|"missing-cli"|"unauthenticated",
+#     "organizations": [ {id,name,slug,tokenIndex} ],
+#     "apps": [ { id, name, slug, region, repositoryFullName, repositoryBranch,
+#       organization: {id,name,slug}, tokenIndex,
+#       environments: [ { id, name, slug, status, url, latest: { id, status,
+#         commitMessage, commitHash, branchName, startedAt, finishedAt,
+#         failureReason } | null } ] } ] }
+
+set -o pipefail
+source "$(dirname "$(readlink -f "$0")")/laravel-cloud-lib"
+
+CACHE="$STATE_DIR/status.json"
+NOW=$(date -u +%FT%TZ)
+CLOUD_TIMEOUT=90
+
+emit_error() {
+  jq -cn --arg now "$NOW" --arg err "$1" --arg code "${2:-}" \
+    '{fetchedAt:$now, error:$err, code:(if $code == "" then null else $code end), organizations:[], apps:[]}'
+  exit 0
+}
+
+if [[ ${1:-} == "--cached" ]]; then
+  [[ -f $CACHE ]] && cat "$CACHE" && exit 0
+  emit_error "no cached status yet"
+fi
+
+[[ -n $CLOUD_BIN ]] || emit_error "The cloud CLI is not installed." missing-cli
+
+# Which tokens to query: the environment token alone, or every stored token.
+if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
+  token_indexes=(env)
+else
+  count=$(stored_token_count)
+  (( count > 0 )) || emit_error "Not signed in to Laravel Cloud." unauthenticated
+  token_indexes=($(seq 0 $((count - 1))))
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+APP_FIELDS="id,name,slug,region,repositoryFullName,repositoryBranch,organization.id,organization.name,organization.slug,environments.id,environments.name,environments.slug,environments.status,environments.url"
+DEPLOY_FIELDS="id,status,commitMessage,commitHash,branchName,startedAt,finishedAt,failureReason"
+
+# One application:list per organization, in parallel.
+for idx in "${token_indexes[@]}"; do
+  (
+    [[ $idx == env ]] || use_token_index "$idx"
+    if out=$(run_cloud application:list --json --fields="$APP_FIELDS") && jq -e 'type == "array"' <<<"$out" >/dev/null 2>&1; then
+      jq -c --arg idx "$idx" 'map(. + {tokenIndex: (if $idx == "env" then -1 else ($idx | tonumber) end)})' <<<"$out" >"$tmp/apps-$idx.json"
+    else
+      cloud_error_message "$out" >"$tmp/apps-$idx.err"
+    fi
+  ) &
+done
+wait
+
+apps='[]'
+for f in "$tmp"/apps-*.json; do
+  [[ -f $f ]] || continue
+  apps=$(jq -c --slurpfile more "$f" '. + $more[0]' <<<"$apps")
+done
+
+if [[ $apps == '[]' ]]; then
+  err_file=$(ls "$tmp"/apps-*.err 2>/dev/null | head -n1)
+  msg=$([[ -n $err_file ]] && cat "$err_file")
+  if [[ -n $err_file ]]; then
+    case $msg in
+      *"Not authenticated"*|*"no longer valid"*|*"Unauthenticated"*|*"401"*)
+        emit_error "Not signed in to Laravel Cloud." unauthenticated ;;
+      *"Invalid API token"*)
+        if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
+          emit_error "LARAVEL_CLOUD_TOKEN is not a valid Laravel Cloud API token."
+        fi
+        emit_error "Stored Laravel Cloud token is no longer valid. Sign in again." unauthenticated ;;
+    esac
+    emit_error "${msg:-cloud application:list failed}"
+  fi
+fi
+
+# One deployment:list per environment, all in parallel — each call is ~1s.
+while IFS=$'\t' read -r env_id idx; do
+  [[ -n $env_id ]] || continue
+  (
+    (( idx >= 0 )) && use_token_index "$idx"
+    if out=$(run_cloud deployment:list "$env_id" --json --fields="$DEPLOY_FIELDS"); then
+      jq -c 'if type == "array" then (.[0] // null) else null end' <<<"$out" >"$tmp/env-$(slugify "$env_id").json" 2>/dev/null
+    fi
+  ) &
+done < <(jq -r '.[] | .tokenIndex as $t | .environments[]? | [.id, $t] | @tsv' <<<"$apps")
+wait
+
+latest='{}'
+for f in "$tmp"/env-*.json; do
+  [[ -f $f ]] || continue
+  id=$(basename "$f" .json); id=${id#env-}
+  entry=$(jq -c --arg id "$id" '{($id): .}' "$f" 2>/dev/null) || continue
+  latest=$(jq -c --argjson e "$entry" '. + $e' <<<"$latest")
+done
+
+result=$(jq -c --argjson latest "$latest" --arg now "$NOW" '{
+  fetchedAt: $now,
+  error: null,
+  code: null,
+  organizations: (map({id: .organization.id, name: .organization.name, slug: .organization.slug, tokenIndex}) | unique_by(.id)),
+  apps: map({
+    id, name, slug, region, repositoryFullName, repositoryBranch, organization, tokenIndex,
+    environments: ((.environments // []) | map(. + { latest: ($latest[(.id | tostring)] // null) }))
+  })
+}' <<<"$apps") || emit_error "failed to assemble status"
+
+printf '%s\n' "$result" >"$CACHE.tmp" && mv -f "$CACHE.tmp" "$CACHE"
+printf '%s\n' "$result"

@@ -1,0 +1,14 @@
+#!/bin/bash
+# Run `cloud deploy:monitor` for one environment from the app's Git stub dir.
+# Usage: laravel-cloud-monitor <app-name> <env-name> [app-slug] [repositoryFullName] [tokenIndex]
+source "$(dirname "$(readlink -f "$0")")/laravel-cloud-lib"
+
+APP=${1:?app name}
+ENV=${2:?environment name}
+SLUG=${3:-$APP}
+REPO=${4:-}
+use_token_index "${5:-}"
+
+[[ -n $CLOUD_BIN ]] || { echo "cloud CLI not found"; exit 1; }
+cd "$(app_workdir "$SLUG" "$REPO")" || exit 1
+exec "${CLOUD_CMD[@]}" deploy:monitor "$APP" "$ENV"
