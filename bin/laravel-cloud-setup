@@ -1,34 +1,20 @@
 #!/bin/bash
 # One-off setup steps, meant to run in a visible terminal (the panel opens one).
 # Usage: laravel-cloud-setup auth      # browser-based sign in via `cloud auth`
-#        laravel-cloud-setup install   # composer global require laravel/cloud-cli
 # Refreshes the bar widget afterwards.
 source "$(dirname "$(readlink -f "$0")")/laravel-cloud-lib"
 
 case ${1:-} in
   auth)
-    if [[ -z $CLOUD_BIN ]]; then
-      echo "The cloud CLI is not installed. Run: composer global require laravel/cloud-cli"
+    if (( ! CLOUD_OK )); then
+      echo "The cloud CLI is missing or cannot start. Complete the setup checklist first."
       exit 1
     fi
     "${CLOUD_CMD[@]}" auth
     status=$?
     ;;
-  install)
-    if ! command -v composer >/dev/null 2>&1; then
-      echo "Composer is required to install the Laravel Cloud CLI (https://getcomposer.org)."
-      exit 1
-    fi
-    composer global require laravel/cloud-cli
-    status=$?
-    if (( status == 0 )); then
-      echo
-      echo "Installed. Make sure Composer's global bin directory is on your PATH,"
-      echo "or set the widget's cloudBin setting to the full path of the cloud binary."
-    fi
-    ;;
   *)
-    echo "Usage: laravel-cloud-setup auth|install"
+    echo "Usage: laravel-cloud-setup auth"
     exit 2
     ;;
 esac

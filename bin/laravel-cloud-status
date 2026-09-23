@@ -8,7 +8,8 @@
 # it belongs to (tokenIndex) so later actions can address the same organization.
 #
 # Output shape:
-#   { "fetchedAt": iso, "error": null|string, "code": null|"missing-cli"|"unauthenticated",
+#   { "fetchedAt": iso, "error": null|string, "code": null|string,
+#     "setup": {phpVersion,phpOk,composerOk,cliOk,cliPath},
 #     "organizations": [ {id,name,slug,tokenIndex} ],
 #     "apps": [ { id, name, slug, region, repositoryFullName, repositoryBranch,
 #       organization: {id,name,slug}, tokenIndex,
@@ -22,10 +23,30 @@ source "$(dirname "$(readlink -f "$0")")/laravel-cloud-lib"
 CACHE="$STATE_DIR/status.json"
 NOW=$(date -u +%FT%TZ)
 CLOUD_TIMEOUT=90
+PHP_VERSION=$(php_version)
+PHP_OK=false
+php_supported && PHP_OK=true
+COMPOSER_OK=false
+command -v composer >/dev/null 2>&1 && COMPOSER_OK=true
+SETUP=$(jq -cn --arg phpVersion "$PHP_VERSION" --argjson phpOk "$PHP_OK" \
+  --argjson composerOk "$COMPOSER_OK" --argjson cliOk "$CLOUD_OK" --arg cliPath "$CLOUD_BIN" \
+  '{phpVersion:$phpVersion, phpOk:$phpOk, composerOk:$composerOk, cliOk:($cliOk == 1), cliPath:$cliPath}')
+
+notify_setup() {
+  notify-send -a "Laravel Cloud" "$1" "$2" 2>/dev/null || true
+}
 
 emit_error() {
-  jq -cn --arg now "$NOW" --arg err "$1" --arg code "${2:-}" \
-    '{fetchedAt:$now, error:$err, code:(if $code == "" then null else $code end), organizations:[], apps:[]}'
+  case ${2:-} in
+    missing-php|missing-composer|missing-cli|cli-broken|unauthenticated)
+      if [[ ! -f $STATE_DIR/setup-pending ]]; then
+        touch "$STATE_DIR/setup-pending"
+        notify_setup "Laravel Cloud needs setup" "Open the panel to continue."
+      fi
+      ;;
+  esac
+  jq -cn --arg now "$NOW" --arg err "$1" --arg code "${2:-}" --argjson setup "$SETUP" \
+    '{fetchedAt:$now, error:$err, code:(if $code == "" then null else $code end), setup:$setup, organizations:[], apps:[]}'
   exit 0
 }
 
@@ -34,7 +55,17 @@ if [[ ${1:-} == "--cached" ]]; then
   emit_error "no cached status yet"
 fi
 
-[[ -n $CLOUD_BIN ]] || emit_error "The cloud CLI is not installed." missing-cli
+check_requirements() {
+  [[ $PHP_OK == true ]] || emit_error "PHP 8.3 or newer is required." missing-php
+  if [[ -n $CLOUD_BIN ]]; then
+    (( CLOUD_OK )) || emit_error "The cloud CLI could not start." cli-broken
+  else
+    [[ $COMPOSER_OK == true ]] || emit_error "Composer is required to install the cloud CLI." missing-composer
+    emit_error "The cloud CLI is not installed." missing-cli
+  fi
+}
+
+check_requirements
 
 # Which tokens to query: the environment token alone, or every stored token.
 if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
@@ -107,16 +138,22 @@ for f in "$tmp"/env-*.json; do
   latest=$(jq -c --argjson e "$entry" '. + $e' <<<"$latest")
 done
 
-result=$(jq -c --argjson latest "$latest" --arg now "$NOW" '{
+result=$(jq -c --argjson latest "$latest" --arg now "$NOW" --argjson setup "$SETUP" '{
   fetchedAt: $now,
   error: null,
   code: null,
+  setup: $setup,
   organizations: (map({id: .organization.id, name: .organization.name, slug: .organization.slug, tokenIndex}) | unique_by(.id)),
   apps: map({
     id, name, slug, region, repositoryFullName, repositoryBranch, organization, tokenIndex,
     environments: ((.environments // []) | map(. + { latest: ($latest[(.id | tostring)] // null) }))
   })
 }' <<<"$apps") || emit_error "failed to assemble status"
+
+if [[ -f $STATE_DIR/setup-pending ]]; then
+  notify_setup "Laravel Cloud is ready" "Setup is complete."
+  rm -f "$STATE_DIR/setup-pending"
+fi
 
 printf '%s\n' "$result" >"$CACHE.tmp" && mv -f "$CACHE.tmp" "$CACHE"
 printf '%s\n' "$result"
