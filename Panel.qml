@@ -43,6 +43,7 @@ Panel {
 
   property var status: null
   property bool loading: false
+  property bool forceStatusRefresh: true
   property bool everLoaded: false
   property double nowMs: Date.now()
 
@@ -55,8 +56,32 @@ Panel {
 
   readonly property var apps: status && Array.isArray(status.apps) ? status.apps : []
   readonly property string errorText: status && status.error ? String(status.error) : ""
-  // "missing-cli" | "unauthenticated" | "" — setup states the panel can fix.
+  // Setup states guide the user through commands to run themselves.
   readonly property string errorCode: status && status.code ? String(status.code) : ""
+  readonly property bool setupNeeded: ["missing-php", "missing-composer", "missing-cli", "cli-broken", "unauthenticated"].indexOf(errorCode) !== -1
+  readonly property var setup: status && status.setup ? status.setup : ({})
+  readonly property int setupStep: errorCode === "missing-php" ? 0
+    : errorCode === "missing-composer" ? 1
+    : errorCode === "missing-cli" || errorCode === "cli-broken" ? 2 : 3
+  readonly property string setupExplanation: {
+    if (errorCode === "missing-php") return "Install or upgrade PHP using Omarchy’s PHP development environment."
+    if (errorCode === "missing-composer") return "Install Composer using Omarchy’s PHP development environment."
+    if (errorCode === "cli-broken") return "The CLI was found but could not start. Run this command to see its error."
+    if (errorCode === "missing-cli") return "Install the official Laravel Cloud CLI with Composer."
+    return "Connect your Laravel Cloud account to see your applications."
+  }
+  readonly property string setupCommand: {
+    if (errorCode === "missing-php" || errorCode === "missing-composer") return "omarchy install dev-env php"
+    if (errorCode === "missing-cli") return "composer global require laravel/cloud-cli"
+    if (errorCode === "cli-broken") return Util.shellQuote(String(setup.cliPath || "cloud")) + " --version"
+    return "cloud auth"
+  }
+  property bool commandCopied: false
+  onSetupCommandChanged: {
+    commandCopied = false
+    copiedTimer.stop()
+  }
+
   readonly property var organizations: status && Array.isArray(status.organizations) ? status.organizations : []
   readonly property bool multiOrg: organizations.length > 1
   readonly property string orgSlug: organizations.length === 1 && organizations[0].slug ? String(organizations[0].slug) : ""
@@ -90,6 +115,7 @@ Panel {
   }
 
   readonly property string tooltipText: {
+    if (setupNeeded) return "Laravel Cloud: setup needed. Click to continue."
     if (errorText) return "Laravel Cloud: " + errorText
     if (anyDeploying) return "Laravel Cloud: deployment in progress"
     if (anyFailed) return "Laravel Cloud: a deployment failed"
@@ -138,8 +164,9 @@ Panel {
 
   // ---- data --------------------------------------------------------------
 
-  function refresh() {
+  function refresh(force) {
     if (statusProc.running) return
+    forceStatusRefresh = force !== false
     loading = true
     statusProc.running = true
   }
@@ -290,12 +317,19 @@ Panel {
     return app && typeof app.tokenIndex === "number" && app.tokenIndex >= 0 ? String(app.tokenIndex) : ""
   }
 
-  // Sign in or install the CLI in a floating terminal; both are interactive.
+  // Sign in interactively in a floating terminal.
   function openSetup(step) {
     if (!root.bar) return
     root.bar.run("omarchy-launch-floating-terminal-with-presentation " + cloudEnv()
       + Util.shellQuote(setupScript) + " " + Util.shellQuote(step))
     root.close()
+  }
+
+  function copySetupCommand() {
+    if (copyProc.running) return
+    commandCopied = false
+    copyProc.command = ["wl-copy", "--", setupCommand]
+    copyProc.running = true
   }
 
   function requestDeploy(app, env) {
@@ -343,10 +377,26 @@ Panel {
   // ---- processes and timers ----------------------------------------------
 
   Process {
+    id: copyProc
+    onExited: (exitCode, exitStatus) => {
+      if (exitCode === 0) {
+        root.commandCopied = true
+        copiedTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: copiedTimer
+    interval: 2000
+    onTriggered: root.commandCopied = false
+  }
+
+  Process {
     id: statusProc
-    command: cloudBin
+    command: (cloudBin
       ? ["env", "LARAVEL_CLOUD_BIN=" + cloudBin, "bash", root.statusScript]
-      : ["bash", root.statusScript]
+      : ["bash", root.statusScript]).concat(root.forceStatusRefresh ? ["--force"] : [])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -380,11 +430,12 @@ Panel {
 
   Timer {
     id: refreshTimer
-    interval: (root.anyDeploying ? root.deployPollSec : root.refreshIntervalSec) * 1000
+    interval: (root.setupNeeded ? (root.opened ? 5 : 30)
+      : (root.anyDeploying ? root.deployPollSec : root.refreshIntervalSec)) * 1000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.refresh()
+    onTriggered: root.refresh(false)
   }
 
   Timer {
@@ -517,39 +568,142 @@ Panel {
 
           // ---- error / setup / empty states
           Text {
-            visible: root.errorText !== ""
+            visible: root.errorText !== "" && !root.setupNeeded
             width: parent.width
             text: root.errorText
-            color: root.errorCode !== "" ? root.foreground : root.urgent
+            color: root.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.Wrap
           }
 
           Column {
-            visible: root.errorCode !== ""
+            visible: root.setupNeeded
             width: parent.width
             spacing: Style.spacing.md
 
             Text {
               width: parent.width
-              text: root.errorCode === "missing-cli"
-                ? "The widget uses the official Laravel Cloud CLI. Install it with Composer, then sign in."
-                : "Sign in with your browser; the CLI stores the token in ~/.config/cloud/config.json."
+              text: (root.setup.phpOk ? "✓ " : "○ ") + "PHP 8.3 or newer"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: root.setupStep === 0
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              width: parent.width
+              visible: !root.setup.cliOk
+              text: (root.setup.composerOk ? "✓ " : "○ ") + "Composer"
+              color: root.foreground
+              opacity: root.setupStep < 1 ? 0.45 : 1
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: root.setupStep === 1
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              width: parent.width
+              text: (root.setup.cliOk ? "✓ " : "○ ") + "Laravel Cloud CLI"
+              color: root.foreground
+              opacity: root.setupStep < 2 ? 0.45 : 1
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: root.setupStep === 2
+              wrapMode: Text.Wrap
+            }
+
+            Text {
+              width: parent.width
+              text: "○ Sign in"
+              color: root.foreground
+              opacity: root.setupStep < 3 ? 0.45 : 1
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: root.setupStep === 3
+              wrapMode: Text.Wrap
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            Text {
+              width: parent.width
+              text: root.setupExplanation
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.Wrap
             }
 
+            Rectangle {
+              visible: root.errorCode !== "unauthenticated"
+              width: parent.width
+              height: commandText.implicitHeight + Style.spacing.md * 2
+              color: "transparent"
+              border.color: root.dim
+              radius: Style.cornerRadius
+
+              Text {
+                id: commandText
+                x: Style.spacing.md
+                y: Style.spacing.md
+                width: parent.width - Style.spacing.md * 2
+                text: root.setupCommand
+                color: root.foreground
+                font.family: "monospace"
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WrapAnywhere
+              }
+
+              HoverHandler { cursorShape: Qt.PointingHandCursor }
+              TapHandler { onTapped: root.copySetupCommand() }
+            }
+
             Button {
-              text: root.errorCode === "missing-cli" ? "Install cloud CLI" : "Sign in to Laravel Cloud"
-              iconText: root.errorCode === "missing-cli" ? "󰇚" : "󰍂"  // nf-md-download / nf-md-login
+              visible: root.errorCode === "unauthenticated"
+              text: "Sign in with browser"
               bordered: true
               foreground: root.foreground
               accent: root.accent
               fontFamily: root.fontFamily
-              onClicked: root.openSetup(root.errorCode === "missing-cli" ? "install" : "auth")
+              onClicked: root.openSetup("auth")
+            }
+
+            Row {
+              spacing: Style.spacing.md
+
+              Button {
+                visible: root.errorCode !== "unauthenticated"
+                text: root.commandCopied ? "Copied" : "Copy command"
+                bordered: true
+                enabled: !copyProc.running
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.copySetupCommand()
+              }
+
+              Button {
+                text: "Check again"
+                bordered: false
+                enabled: !root.loading
+                foreground: root.foreground
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onClicked: root.refresh()
+              }
+            }
+
+            Text {
+              width: parent.width
+              visible: root.errorCode !== "unauthenticated"
+              text: "Run this in your terminal. We’ll check automatically."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
             }
           }
 

@@ -15,11 +15,26 @@ CLOUD_CONFIG="$HOME/.config/cloud/config.json"
 
 PLUGIN_ID="christophrumpel.laravel-cloud"
 
+# omarchy-shell does not load the user's interactive shell configuration.
+for extra_bin in "$HOME/.local/share/mise/shims" "$HOME/.local/bin"; do
+  [[ -d $extra_bin ]] && PATH="$PATH:$extra_bin"
+done
+export PATH
+
+php_version() {
+  timeout -k 1 2 php -r 'echo PHP_VERSION;' 2>/dev/null
+}
+
+php_supported() {
+  timeout -k 1 2 php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' 2>/dev/null
+}
+
 resolve_cloud() {
   local candidate
   for candidate in \
     "${LARAVEL_CLOUD_BIN:-}" \
     "$(command -v cloud 2>/dev/null)" \
+    "$HOME/.local/bin/cloud" \
     "$HOME/.config/composer/vendor/bin/cloud" \
     "$HOME/.composer/vendor/bin/cloud"; do
     if [[ -n $candidate && -x $candidate ]]; then
@@ -32,14 +47,18 @@ resolve_cloud() {
 
 CLOUD_BIN=$(resolve_cloud)
 
+# Bound startup probes so a stalled executable cannot freeze setup.
 # How to invoke the CLI. The phar's requirement checker refuses to start when
 # PHP lacks the iconv extension; loading it on the command line fixes that.
+CLOUD_OK=0
 CLOUD_CMD=()
 if [[ -n $CLOUD_BIN ]]; then
-  if "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  if timeout -k 1 2 "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=("$CLOUD_BIN")
-  elif php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
+    CLOUD_OK=1
+  elif timeout -k 1 2 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=(php -d extension=iconv "$CLOUD_BIN")
+    CLOUD_OK=1
   else
     CLOUD_CMD=("$CLOUD_BIN")
   fi

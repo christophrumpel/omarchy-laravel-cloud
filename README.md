@@ -13,9 +13,11 @@ credentials of its own.
 ## Requirements
 
 - Omarchy 4 (the shell plugin system; Omarchy 3.x is not supported)
-- PHP 8.2+ and [Composer](https://getcomposer.org)
+- PHP 8.3+ and [Composer](https://getcomposer.org)
+  Install PHP and Composer with `omarchy install dev-env php`.
 - The Laravel Cloud CLI: `composer global require laravel/cloud-cli`
-- `jq`, `git`, `notify-send` and `xdg-open` (all part of a stock Omarchy install)
+- `timeout` and `sha256sum` (GNU coreutils)
+- `jq`, `git`, `notify-send`, `wl-copy` and `xdg-open` (all part of a stock Omarchy install)
 
 ## Install
 
@@ -24,9 +26,8 @@ omarchy plugin add https://github.com/christophrumpel/omarchy-laravel-cloud.git 
 ```
 
 Omarchy clones the repo into `~/.config/omarchy/plugins/christophrumpel.laravel-cloud/`,
-asks which bar section to use, and enables the widget. If the `cloud` CLI is
-missing or you are not signed in yet, the panel shows a button that takes
-care of it (see below).
+asks which bar section to use, and enables the widget. The panel guides you through any
+missing requirements (see First run below).
 
 To update or remove:
 
@@ -39,12 +40,33 @@ Removing the plugin does not touch the CLI or its tokens. The widget's own
 cache lives in `~/.local/state/omarchy/laravel-cloud/` and can be deleted
 freely.
 
+## First run
+
+Open the panel to see a checklist: PHP 8.3 or newer, Composer, the Laravel
+Cloud CLI, and sign-in. The current step explains what is needed and shows a
+command you can click to copy (or use **Copy command**). Paste it into a
+terminal and run it yourself. The plugin never installs anything.
+
+Use `omarchy install dev-env php` for PHP and Composer, then
+`composer global require laravel/cloud-cli` for the CLI. If the CLI cannot
+start, the panel shows its `--version` command to help diagnose the problem.
+Finally, click **Sign in with browser**. Composer is hidden from the checklist
+once the CLI works, because it is no longer needed for setup.
+
+The checklist checks again every 5 seconds while open and every 30 seconds
+while closed; **Check again** refreshes immediately. You receive one
+notification when setup is needed and another after the first successful
+status fetch. If a login is rejected, automatic checks retry the API only when
+credentials change or five minutes have passed. Opening the panel or clicking
+**Check again** retries immediately. Local startup checks have short timeouts
+so a stalled PHP or CLI process cannot freeze setup.
+
 ## Authentication
 
 The widget reuses whatever the `cloud` CLI is signed in with. There are two
 ways to sign in:
 
-1. **Browser sign-in (recommended).** Click *Sign in to Laravel Cloud* in the
+1. **Browser sign-in (recommended).** Click *Sign in with browser* in the
    panel, or run `cloud auth` in a terminal. The CLI opens your browser and
    stores an API token per organization in `~/.config/cloud/config.json`.
    If you belong to several organizations, the widget shows the apps of all
@@ -94,7 +116,7 @@ omarchy bar set christophrumpel.laravel-cloud <key> <value>
 |----------------------|---------|-----------------------------------------------------------|
 | `refreshIntervalSec` | `300`   | Background refresh interval                               |
 | `deployPollSec`      | `10`    | Poll interval while a deployment is running               |
-| `cloudBin`           | empty   | Explicit path to the `cloud` binary; auto-detected if empty (`PATH`, then Composer's global `vendor/bin`) |
+| `cloudBin`           | empty   | Explicit path to the `cloud` binary; auto-detected if empty (`PATH`, `~/.local/bin`, then Composer's global `vendor/bin`) |
 
 ## What the plugin does on your system
 
@@ -104,12 +126,15 @@ list of what this one touches:
 - **Runs** the `cloud` CLI (`application:list`, `deployment:list`, `deploy`,
   `deploy:monitor`, and `auth` when you click *Sign in*). The CLI talks to
   the Laravel Cloud API over HTTPS. Nothing else on the network is contacted.
-- **Runs** `composer global require laravel/cloud-cli` only when you click
-  *Install cloud CLI* in the panel. Nothing is installed automatically.
+- **Checks** for `php`, `composer`, and `cloud`; **copies commands** via `wl-copy`.
+  Adds existing mise shims (`~/.local/share/mise/shims`) and `~/.local/bin`
+  to its own PATH so it can find Omarchy’s PHP tools.
 - **Reads** `~/.config/cloud/config.json` to know whether you are signed in
   and to hand the right organization's token to the CLI.
 - **Writes** only to `~/.local/state/omarchy/laravel-cloud/`: the status
-  cache (`status.json`, no secrets), deploy logs, and one tiny Git
+  cache (`status.json`, no secrets), the `setup-pending` notification marker,
+  an `auth-retry.json` file containing a credential hash and retry time (no tokens),
+  deploy logs, and one tiny Git
   repository per app under `repos/`. The CLI refuses to deploy from a
   directory without a Git remote, so each stub has your app's repository set
   as `origin`. Nothing is ever fetched, committed or pushed there.
@@ -127,7 +152,7 @@ two-click arm/confirm on the rocket button is the only safeguard.
 - `bin/laravel-cloud-status`: builds the JSON snapshot (`--cached` reads the last one).
 - `bin/laravel-cloud-deploy`: deploy, wait, notify, refresh.
 - `bin/laravel-cloud-monitor`: `cloud deploy:monitor` for the terminal button.
-- `bin/laravel-cloud-setup`: `auth` and `install` steps for the panel buttons.
+- `bin/laravel-cloud-setup`: only runs `cloud auth` for the sign-in button.
 - `bin/laravel-cloud-lib`: shared helpers.
 
 ## IPC

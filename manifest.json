@@ -50,7 +50,7 @@
         "type": "path",
         "label": "Path to the cloud CLI",
         "defaultValue": "",
-        "description": "Leave empty to auto-detect (PATH, then Composer's global vendor/bin)."
+        "description": "Leave empty to auto-detect (PATH, ~/.local/bin, then Composer's global vendor/bin)."
       }
     ]
   }
