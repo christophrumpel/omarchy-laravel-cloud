@@ -22,11 +22,11 @@ done
 export PATH
 
 php_version() {
-  php -r 'echo PHP_VERSION;' 2>/dev/null
+  timeout -k 1 2 php -r 'echo PHP_VERSION;' 2>/dev/null
 }
 
 php_supported() {
-  php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' 2>/dev/null
+  timeout -k 1 2 php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' 2>/dev/null
 }
 
 resolve_cloud() {
@@ -47,15 +47,16 @@ resolve_cloud() {
 
 CLOUD_BIN=$(resolve_cloud)
 
+# Bound startup probes so a stalled executable cannot freeze setup.
 # How to invoke the CLI. The phar's requirement checker refuses to start when
 # PHP lacks the iconv extension; loading it on the command line fixes that.
 CLOUD_OK=0
 CLOUD_CMD=()
 if [[ -n $CLOUD_BIN ]]; then
-  if "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  if timeout -k 1 2 "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=("$CLOUD_BIN")
     CLOUD_OK=1
-  elif php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  elif timeout -k 1 2 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=(php -d extension=iconv "$CLOUD_BIN")
     CLOUD_OK=1
   else

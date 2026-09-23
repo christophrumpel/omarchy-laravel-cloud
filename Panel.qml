@@ -43,6 +43,7 @@ Panel {
 
   property var status: null
   property bool loading: false
+  property bool forceStatusRefresh: true
   property bool everLoaded: false
   property double nowMs: Date.now()
 
@@ -62,13 +63,12 @@ Panel {
   readonly property int setupStep: errorCode === "missing-php" ? 0
     : errorCode === "missing-composer" ? 1
     : errorCode === "missing-cli" || errorCode === "cli-broken" ? 2 : 3
-  readonly property string setupTitle: ["PHP 8.3 or newer", "Composer", "Laravel Cloud CLI", "Signed in to Laravel Cloud"][setupStep]
   readonly property string setupExplanation: {
     if (errorCode === "missing-php") return "Install or upgrade PHP using Omarchy’s PHP development environment."
     if (errorCode === "missing-composer") return "Install Composer using Omarchy’s PHP development environment."
     if (errorCode === "cli-broken") return "The CLI was found but could not start. Run this command to see its error."
     if (errorCode === "missing-cli") return "Install the official Laravel Cloud CLI with Composer."
-    return "Sign in with your browser; the CLI stores the token in ~/.config/cloud/config.json."
+    return "Connect your Laravel Cloud account to see your applications."
   }
   readonly property string setupCommand: {
     if (errorCode === "missing-php" || errorCode === "missing-composer") return "omarchy install dev-env php"
@@ -164,8 +164,9 @@ Panel {
 
   // ---- data --------------------------------------------------------------
 
-  function refresh() {
+  function refresh(force) {
     if (statusProc.running) return
+    forceStatusRefresh = force !== false
     loading = true
     statusProc.running = true
   }
@@ -393,9 +394,9 @@ Panel {
 
   Process {
     id: statusProc
-    command: cloudBin
+    command: (cloudBin
       ? ["env", "LARAVEL_CLOUD_BIN=" + cloudBin, "bash", root.statusScript]
-      : ["bash", root.statusScript]
+      : ["bash", root.statusScript]).concat(root.forceStatusRefresh ? ["--force"] : [])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -429,12 +430,12 @@ Panel {
 
   Timer {
     id: refreshTimer
-    interval: (root.setupNeeded ? (root.opened ? 3 : 30)
+    interval: (root.setupNeeded ? (root.opened ? 5 : 30)
       : (root.anyDeploying ? root.deployPollSec : root.refreshIntervalSec)) * 1000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.refresh()
+    onTriggered: root.refresh(false)
   }
 
   Timer {
@@ -583,7 +584,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: (root.setup.phpOk ? "✓ " : "1. ") + "PHP 8.3 or newer" + (root.setup.phpOk ? " · " + String(root.setup.phpVersion || "") : "")
+              text: (root.setup.phpOk ? "✓ " : "○ ") + "PHP 8.3 or newer"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -593,7 +594,8 @@ Panel {
 
             Text {
               width: parent.width
-              text: (root.setup.composerOk ? "✓ " : "2. ") + "Composer" + (root.setup.composerOk ? " · Available" : "")
+              visible: !root.setup.cliOk
+              text: (root.setup.composerOk ? "✓ " : "○ ") + "Composer"
               color: root.foreground
               opacity: root.setupStep < 1 ? 0.45 : 1
               font.family: root.fontFamily
@@ -604,7 +606,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: (root.setup.cliOk ? "✓ " : "3. ") + "Laravel Cloud CLI" + (root.setup.cliOk ? " · " + String(root.setup.cliPath || "") : "")
+              text: (root.setup.cliOk ? "✓ " : "○ ") + "Laravel Cloud CLI"
               color: root.foreground
               opacity: root.setupStep < 2 ? 0.45 : 1
               font.family: root.fontFamily
@@ -615,7 +617,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "4. Signed in to Laravel Cloud"
+              text: "○ Sign in"
               color: root.foreground
               opacity: root.setupStep < 3 ? 0.45 : 1
               font.family: root.fontFamily
@@ -628,16 +630,6 @@ Panel {
 
             Text {
               width: parent.width
-              text: root.setupTitle
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-              wrapMode: Text.Wrap
-            }
-
-            Text {
-              width: parent.width
               text: root.setupExplanation
               color: root.dim
               font.family: root.fontFamily
@@ -646,6 +638,7 @@ Panel {
             }
 
             Rectangle {
+              visible: root.errorCode !== "unauthenticated"
               width: parent.width
               height: commandText.implicitHeight + Style.spacing.md * 2
               color: "transparent"
@@ -682,6 +675,7 @@ Panel {
               spacing: Style.spacing.md
 
               Button {
+                visible: root.errorCode !== "unauthenticated"
                 text: root.commandCopied ? "Copied" : "Copy command"
                 bordered: true
                 enabled: !copyProc.running
@@ -704,7 +698,8 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Paste it into a terminal. This panel moves on by itself once the step is done."
+              visible: root.errorCode !== "unauthenticated"
+              text: "Run this in your terminal. We’ll check automatically."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

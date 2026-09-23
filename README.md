@@ -16,6 +16,7 @@ credentials of its own.
 - PHP 8.3+ and [Composer](https://getcomposer.org)
   Install PHP and Composer with `omarchy install dev-env php`.
 - The Laravel Cloud CLI: `composer global require laravel/cloud-cli`
+- `timeout` and `sha256sum` (GNU coreutils)
 - `jq`, `git`, `notify-send`, `wl-copy` and `xdg-open` (all part of a stock Omarchy install)
 
 ## Install
@@ -49,12 +50,16 @@ terminal and run it yourself. The plugin never installs anything.
 Use `omarchy install dev-env php` for PHP and Composer, then
 `composer global require laravel/cloud-cli` for the CLI. If the CLI cannot
 start, the panel shows its `--version` command to help diagnose the problem.
-Finally, click **Sign in with browser** or run `cloud auth`.
+Finally, click **Sign in with browser**. Composer is hidden from the checklist
+once the CLI works, because it is no longer needed for setup.
 
-The checklist checks again every 3 seconds while open and every 30 seconds
+The checklist checks again every 5 seconds while open and every 30 seconds
 while closed; **Check again** refreshes immediately. You receive one
 notification when setup is needed and another after the first successful
-status fetch.
+status fetch. If a login is rejected, automatic checks retry the API only when
+credentials change or five minutes have passed. Opening the panel or clicking
+**Check again** retries immediately. Local startup checks have short timeouts
+so a stalled PHP or CLI process cannot freeze setup.
 
 ## Authentication
 
@@ -128,6 +133,7 @@ list of what this one touches:
   and to hand the right organization's token to the CLI.
 - **Writes** only to `~/.local/state/omarchy/laravel-cloud/`: the status
   cache (`status.json`, no secrets), the `setup-pending` notification marker,
+  an `auth-retry.json` file containing a credential hash and retry time (no tokens),
   deploy logs, and one tiny Git
   repository per app under `repos/`. The CLI refuses to deploy from a
   directory without a Git remote, so each stub has your app's repository set

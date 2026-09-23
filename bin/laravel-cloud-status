@@ -76,6 +76,34 @@ else
   token_indexes=($(seq 0 $((count - 1))))
 fi
 
+# A rejected login should not trigger another API request on every setup poll.
+# Store only a SHA-256 fingerprint, never the credentials. Changed credentials,
+# an explicit refresh, or five elapsed minutes allow another attempt.
+AUTH_RETRY="$STATE_DIR/auth-retry.json"
+AUTH_FINGERPRINT=$(
+  { if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
+      printf '%s' "$LARAVEL_CLOUD_TOKEN"
+    else
+      stored_tokens
+    fi
+  } | sha256sum | cut -d ' ' -f 1
+)
+if [[ ${1:-} != --force && -n $AUTH_FINGERPRINT && -f $AUTH_RETRY ]]; then
+  if jq -e --arg fingerprint "$AUTH_FINGERPRINT" --argjson now "$(date +%s)" \
+    '.fingerprint == $fingerprint and .retryAfter > $now' "$AUTH_RETRY" >/dev/null 2>&1; then
+    emit_error "$(jq -r '.message' "$AUTH_RETRY")" "$(jq -r '.code' "$AUTH_RETRY")"
+  fi
+fi
+
+emit_auth_error() {
+  if [[ -n $AUTH_FINGERPRINT ]]; then
+    jq -cn --arg fingerprint "$AUTH_FINGERPRINT" --arg message "$1" --arg code "${2:-}" \
+      --argjson retryAfter "$(($(date +%s) + 300))" \
+      '{fingerprint:$fingerprint, retryAfter:$retryAfter, message:$message, code:$code}' >"$AUTH_RETRY"
+  fi
+  emit_error "$@"
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -107,12 +135,12 @@ if [[ $apps == '[]' ]]; then
   if [[ -n $err_file ]]; then
     case $msg in
       *"Not authenticated"*|*"no longer valid"*|*"Unauthenticated"*|*"401"*)
-        emit_error "Not signed in to Laravel Cloud." unauthenticated ;;
+        emit_auth_error "Not signed in to Laravel Cloud." unauthenticated ;;
       *"Invalid API token"*)
         if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
-          emit_error "LARAVEL_CLOUD_TOKEN is not a valid Laravel Cloud API token."
+          emit_auth_error "LARAVEL_CLOUD_TOKEN is not a valid Laravel Cloud API token."
         fi
-        emit_error "Stored Laravel Cloud token is no longer valid. Sign in again." unauthenticated ;;
+        emit_auth_error "Stored Laravel Cloud token is no longer valid. Sign in again." unauthenticated ;;
     esac
     emit_error "${msg:-cloud application:list failed}"
   fi
@@ -149,6 +177,8 @@ result=$(jq -c --argjson latest "$latest" --arg now "$NOW" --argjson setup "$SET
     environments: ((.environments // []) | map(. + { latest: ($latest[(.id | tostring)] // null) }))
   })
 }' <<<"$apps") || emit_error "failed to assemble status"
+
+rm -f "$AUTH_RETRY"
 
 if [[ -f $STATE_DIR/setup-pending ]]; then
   notify_setup "Laravel Cloud is ready" "Setup is complete."
