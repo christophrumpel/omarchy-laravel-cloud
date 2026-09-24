@@ -28,9 +28,19 @@ PHP_OK=false
 php_supported && PHP_OK=true
 COMPOSER_OK=false
 command -v composer >/dev/null 2>&1 && COMPOSER_OK=true
+SOCKETS_OK=false
+php_sockets && SOCKETS_OK=true
+PHP_INI=$(php_ini)
+# Whether the CLI holds a credential. Unlike the probes above this says nothing
+# about whether the credential still works -- only that signing in was done.
+SIGNED_IN=false
+if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]] || (( $(stored_token_count) > 0 )); then
+  SIGNED_IN=true
+fi
 SETUP=$(jq -cn --arg phpVersion "$PHP_VERSION" --argjson phpOk "$PHP_OK" \
   --argjson composerOk "$COMPOSER_OK" --argjson cliOk "$CLOUD_OK" --arg cliPath "$CLOUD_BIN" \
-  '{phpVersion:$phpVersion, phpOk:$phpOk, composerOk:$composerOk, cliOk:($cliOk == 1), cliPath:$cliPath}')
+  --argjson signedIn "$SIGNED_IN" --argjson socketsOk "$SOCKETS_OK" --arg phpIni "$PHP_INI" \
+  '{phpVersion:$phpVersion, phpOk:$phpOk, composerOk:$composerOk, cliOk:($cliOk == 1), cliPath:$cliPath, signedIn:$signedIn, socketsOk:$socketsOk, phpIni:$phpIni}')
 
 notify_setup() {
   notify-send -a "Laravel Cloud" "$1" "$2" 2>/dev/null || true
@@ -38,7 +48,7 @@ notify_setup() {
 
 emit_error() {
   case ${2:-} in
-    missing-php|missing-composer|missing-cli|cli-broken|unauthenticated)
+    missing-php|missing-composer|missing-cli|cli-broken|missing-sockets|unauthenticated)
       if [[ ! -f $STATE_DIR/setup-pending ]]; then
         touch "$STATE_DIR/setup-pending"
         notify_setup "Laravel Cloud needs setup" "Open the panel to continue."
@@ -72,7 +82,12 @@ if [[ -n ${LARAVEL_CLOUD_TOKEN:-} ]]; then
   token_indexes=(env)
 else
   count=$(stored_token_count)
-  (( count > 0 )) || emit_error "Not signed in to Laravel Cloud." unauthenticated
+  if (( count == 0 )); then
+    # Say why signing in cannot work before telling them to sign in.
+    [[ $SOCKETS_OK == true ]] ||
+      emit_error "PHP is missing the sockets extension, which browser sign-in needs." missing-sockets
+    emit_error "Not signed in to Laravel Cloud." unauthenticated
+  fi
   token_indexes=($(seq 0 $((count - 1))))
 fi
 

@@ -15,6 +15,9 @@ credentials of its own.
 - Omarchy 4 (the shell plugin system; Omarchy 3.x is not supported)
 - PHP 8.3+ and [Composer](https://getcomposer.org)
   Install PHP and Composer with `omarchy install dev-env php`.
+- PHP's `sockets` extension, which browser sign-in needs. Omarchy's PHP
+  installer does not enable it, so on a stock install you must run:
+  `sudo sed -i 's/^;extension=sockets/extension=sockets/' /etc/php/php.ini`
 - The Laravel Cloud CLI: `composer global require laravel/cloud-cli`
 - `timeout` and `sha256sum` (GNU coreutils)
 - `jq`, `git`, `notify-send`, `wl-copy` and `xdg-open` (all part of a stock Omarchy install)
@@ -32,9 +35,13 @@ missing requirements (see First run below).
 To update or remove:
 
 ```bash
-omarchy plugin update christophrumpel.laravel-cloud
+omarchy plugin update christophrumpel.laravel-cloud && omarchy restart shell
 omarchy plugin remove christophrumpel.laravel-cloud
 ```
+
+The restart matters: `omarchy plugin update` replaces the files on disk, but a
+running shell keeps the QML it already loaded, so the update has no visible
+effect until the shell restarts.
 
 Removing the plugin does not touch the CLI or its tokens. The widget's own
 cache lives in `~/.local/state/omarchy/laravel-cloud/` and can be deleted
@@ -43,7 +50,8 @@ freely.
 ## First run
 
 Open the panel to see a checklist: PHP 8.3 or newer, Composer, the Laravel
-Cloud CLI, and sign-in. The current step explains what is needed and shows a
+Cloud CLI, the `sockets` extension, and sign-in. Every row reports what was
+actually found, not just what is required. The current step explains what is needed and shows a
 command you can click to copy (or use **Copy command**). Paste it into a
 terminal and run it yourself. The plugin never installs anything.
 

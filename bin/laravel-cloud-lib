@@ -22,11 +22,24 @@ done
 export PATH
 
 php_version() {
-  timeout -k 1 2 php -r 'echo PHP_VERSION;' 2>/dev/null
+  timeout -k 1 5 php -r 'echo PHP_VERSION;' 2>/dev/null
 }
 
 php_supported() {
-  timeout -k 1 2 php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' 2>/dev/null
+  timeout -k 1 5 php -r 'exit(PHP_VERSION_ID >= 80300 ? 0 : 1);' 2>/dev/null
+}
+
+# `cloud auth` stands up a local callback server for the browser round-trip and
+# refuses to start without ext-sockets. Arch ships the module but leaves it
+# commented out, and Omarchy's PHP installer does not enable it, so a fully
+# "installed" CLI still cannot sign in.
+php_sockets() {
+  timeout -k 1 5 php -r 'exit(extension_loaded("sockets") ? 0 : 1);' 2>/dev/null
+}
+
+# Which php.ini is actually loaded, so the remedy names the real file.
+php_ini() {
+  timeout -k 1 5 php -r 'echo php_ini_loaded_file() ?: "";' 2>/dev/null
 }
 
 resolve_cloud() {
@@ -56,7 +69,7 @@ if [[ -n $CLOUD_BIN ]]; then
   if timeout -k 1 2 "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=("$CLOUD_BIN")
     CLOUD_OK=1
-  elif timeout -k 1 2 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  elif timeout -k 1 5 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=(php -d extension=iconv "$CLOUD_BIN")
     CLOUD_OK=1
   else

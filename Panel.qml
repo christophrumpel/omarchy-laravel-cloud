@@ -58,21 +58,83 @@ Panel {
   readonly property string errorText: status && status.error ? String(status.error) : ""
   // Setup states guide the user through commands to run themselves.
   readonly property string errorCode: status && status.code ? String(status.code) : ""
-  readonly property bool setupNeeded: ["missing-php", "missing-composer", "missing-cli", "cli-broken", "unauthenticated"].indexOf(errorCode) !== -1
+  readonly property bool setupNeeded: ["missing-php", "missing-composer", "missing-cli", "cli-broken", "missing-sockets", "unauthenticated"].indexOf(errorCode) !== -1
   readonly property var setup: status && status.setup ? status.setup : ({})
   readonly property int setupStep: errorCode === "missing-php" ? 0
     : errorCode === "missing-composer" ? 1
-    : errorCode === "missing-cli" || errorCode === "cli-broken" ? 2 : 3
+    : errorCode === "missing-cli" || errorCode === "cli-broken" ? 2
+    : errorCode === "missing-sockets" ? 3 : 4
   readonly property string setupExplanation: {
-    if (errorCode === "missing-php") return "Install or upgrade PHP using Omarchy’s PHP development environment."
+    if (errorCode === "missing-php") return (String(setup.phpVersion || "") === ""
+      ? "PHP is not installed. Install it with Omarchy’s PHP development environment."
+      : "PHP " + setup.phpVersion + " is too old. Upgrade with Omarchy’s PHP development environment.")
     if (errorCode === "missing-composer") return "Install Composer using Omarchy’s PHP development environment."
     if (errorCode === "cli-broken") return "The CLI was found but could not start. Run this command to see its error."
     if (errorCode === "missing-cli") return "Install the official Laravel Cloud CLI with Composer."
+    if (errorCode === "missing-sockets") return "Browser sign-in opens a local callback server, which needs PHP\u2019s sockets extension. Enable it, then check again."
     return "Connect your Laravel Cloud account to see your applications."
   }
+  // Each line reports what we looked for AND what we actually found, so the
+  // panel never states a bare requirement the user cannot check themselves.
+  // PHP, Composer and the CLI are probed on every run, so their state is
+  // always known. Sign-in cannot be probed until the CLI runs, so it stays
+  // "unknown" until then rather than posing as a step you could do now.
+  readonly property var setupRows: {
+    var phpFound = String(setup.phpVersion || "")
+    var cliPath = String(setup.cliPath || "")
+    var rows = [{
+      step: 0,
+      state: setup.phpOk ? "ok" : "fail",
+      label: "PHP 8.3 or newer",
+      detail: setup.phpOk ? "found " + phpFound
+        : phpFound === "" ? "not installed"
+        : "found " + phpFound + ", too old"
+    }]
+    // Composer only matters as the means of installing the CLI.
+    if (!setup.cliOk)
+      rows.push({
+        step: 1,
+        state: setup.composerOk ? "ok" : "fail",
+        label: "Composer",
+        detail: setup.composerOk ? "installed" : "not installed"
+      })
+    rows.push({
+      step: 2,
+      state: setup.cliOk ? "ok" : "fail",
+      label: "Laravel Cloud CLI",
+      detail: setup.cliOk ? (cliPath !== "" ? "found at " + cliPath : "installed")
+        : cliPath !== "" ? "found at " + cliPath + ", but it will not start"
+        : "not installed"
+    })
+    rows.push({
+      step: 3,
+      state: !setup.phpOk ? "unknown" : setup.socketsOk ? "ok" : "fail",
+      label: "PHP sockets extension",
+      detail: !setup.phpOk ? "can\u2019t be checked until PHP is installed"
+        : setup.socketsOk ? "enabled"
+        : "not enabled, so browser sign-in cannot start"
+    })
+    // A stored token that the API rejected still counts as "signed in" to the
+    // probe, so the error code decides here -- otherwise this row would claim
+    // success next to an authentication failure.
+    var authFailed = errorCode === "unauthenticated"
+    rows.push({
+      step: 4,
+      state: !setup.cliOk ? "unknown" : (setup.signedIn && !authFailed) ? "ok" : "fail",
+      label: "Signed in to Laravel Cloud",
+      detail: !setup.cliOk ? "can’t be checked until the CLI is installed"
+        : authFailed ? (setup.signedIn ? "sign-in expired, sign in again" : "not signed in")
+        : setup.signedIn ? "signed in" : "not signed in"
+    })
+    return rows
+  }
+
   readonly property string setupCommand: {
     if (errorCode === "missing-php" || errorCode === "missing-composer") return "omarchy install dev-env php"
     if (errorCode === "missing-cli") return "composer global require laravel/cloud-cli"
+    if (errorCode === "missing-sockets")
+      return "sudo sed -i 's/^;extension=sockets/extension=sockets/' "
+        + Util.shellQuote(String(setup.phpIni || "/etc/php/php.ini"))
     if (errorCode === "cli-broken") return Util.shellQuote(String(setup.cliPath || "cloud")) + " --version"
     return "cloud auth"
   }
@@ -141,9 +203,11 @@ Panel {
   }
 
   function close() {
-    setCenterHoverRevealSuppressed(false)
-    armedEnvId = ""
+    // Hide before anything else: a throw in a helper must never leave the
+    // panel open with Esc, the bar icon and click-outside all dead.
     root.controller.hide()
+    armedEnvId = ""
+    setCenterHoverRevealSuppressed(false)
   }
 
   function toggle() {
@@ -158,7 +222,13 @@ Panel {
   }
 
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (!root.bar) return
+    // Plugins are handed PluginBarApi, where centerHoverRevealSuppressed is
+    // readonly -- only the setter works. The direct assignment is the legacy
+    // path for older shells that expose the raw Bar.
+    if (typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if ("centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
@@ -578,52 +648,30 @@ Panel {
           }
 
           Column {
+            id: setupList
             visible: root.setupNeeded
             width: parent.width
             spacing: Style.spacing.md
 
-            Text {
-              width: parent.width
-              text: (root.setup.phpOk ? "✓ " : "○ ") + "PHP 8.3 or newer"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.setupStep === 0
-              wrapMode: Text.Wrap
-            }
+            Repeater {
+              model: root.setupRows
 
-            Text {
-              width: parent.width
-              visible: !root.setup.cliOk
-              text: (root.setup.composerOk ? "✓ " : "○ ") + "Composer"
-              color: root.foreground
-              opacity: root.setupStep < 1 ? 0.45 : 1
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.setupStep === 1
-              wrapMode: Text.Wrap
-            }
-
-            Text {
-              width: parent.width
-              text: (root.setup.cliOk ? "✓ " : "○ ") + "Laravel Cloud CLI"
-              color: root.foreground
-              opacity: root.setupStep < 2 ? 0.45 : 1
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.setupStep === 2
-              wrapMode: Text.Wrap
-            }
-
-            Text {
-              width: parent.width
-              text: "○ Sign in"
-              color: root.foreground
-              opacity: root.setupStep < 3 ? 0.45 : 1
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: root.setupStep === 3
-              wrapMode: Text.Wrap
+              Text {
+                required property var modelData
+                width: setupList.width
+                text: (modelData.state === "ok" ? "✓ " : modelData.state === "fail" ? "✗ " : "○ ")
+                  + modelData.label + " — " + modelData.detail
+                // Only the step you can act on now is coloured as a problem;
+                // the failures behind it are stated but kept quiet.
+                color: modelData.state === "fail" && modelData.step === root.setupStep
+                  ? root.urgent : root.foreground
+                opacity: modelData.state === "unknown" ? 0.45
+                  : modelData.state === "fail" && modelData.step !== root.setupStep ? 0.7 : 1
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: modelData.step === root.setupStep
+                wrapMode: Text.Wrap
+              }
             }
 
             PanelSeparator { foreground: root.foreground }
