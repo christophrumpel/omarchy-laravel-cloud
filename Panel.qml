@@ -72,7 +72,7 @@ Panel {
     if (errorCode === "missing-cli") return "Install the official Laravel Cloud CLI with Composer."
     if (errorCode === "missing-sockets") return (String(setup.phpIni || "") === ""
       ? "Browser sign-in needs PHP\u2019s sockets extension, and this PHP loads no php.ini to enable it in. Install a PHP build that ships with it."
-      : "Browser sign-in opens a local callback server, which needs PHP\u2019s sockets extension. Enable it in php.ini, then check again.")
+      : "Browser sign-in opens a local callback server, which needs PHP\u2019s sockets extension. Uncomment this line in " + setup.phpIni + ", then check again.")
     return "Connect your Laravel Cloud account to see your applications."
   }
   // Each line reports what we looked for AND what we actually found, so the
@@ -135,13 +135,16 @@ Panel {
     if (errorCode === "missing-cli") return "composer global require laravel/cloud-cli"
     // Editing php.ini only helps when there is one. A build with the extension
     // compiled in reports no loaded ini, so point at a build that ships it.
+    // With an ini, show the line to enable rather than a command that edits a
+    // root-owned file on the user's behalf.
     if (errorCode === "missing-sockets")
       return String(setup.phpIni || "") === ""
         ? "mise tool-alias set php github:nunomaduro/static-php-builds && mise use --global php@latest"
-        : "sudo sed -i 's/^;extension=sockets/extension=sockets/' " + Util.shellQuote(String(setup.phpIni))
+        : "extension=sockets"
     if (errorCode === "cli-broken") return Util.shellQuote(String(setup.cliPath || "cloud")) + " --version"
     return "cloud auth"
   }
+  readonly property bool setupCommandIsLine: errorCode === "missing-sockets" && String(setup.phpIni || "") !== ""
   property bool commandCopied: false
   onSetupCommandChanged: {
     commandCopied = false
@@ -719,7 +722,7 @@ Panel {
 
               Button {
                 visible: root.errorCode !== "unauthenticated"
-                text: root.commandCopied ? "Copied" : "Copy command"
+                text: root.commandCopied ? "Copied" : root.setupCommandIsLine ? "Copy line" : "Copy command"
                 bordered: true
                 enabled: !copyProc.running
                 foreground: root.foreground

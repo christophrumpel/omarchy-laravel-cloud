@@ -16,8 +16,8 @@ credentials of its own.
 - PHP 8.3+ and [Composer](https://getcomposer.org)
   Install PHP and Composer with `omarchy install dev-env php`.
 - PHP's `sockets` extension, which browser sign-in needs. Omarchy's PHP
-  installer does not enable it, so on a stock install you must run:
-  `sudo sed -i 's/^;extension=sockets/extension=sockets/' /etc/php/php.ini`
+  installer does not enable it, so uncomment `extension=sockets` in your
+  `php.ini` (`/etc/php/php.ini` on a stock install).
 - The Laravel Cloud CLI: `composer global require laravel/cloud-cli`
 - `timeout` and `sha256sum` (GNU coreutils)
 - `jq`, `git`, `notify-send`, `wl-copy` and `xdg-open` (all part of a stock Omarchy install)
