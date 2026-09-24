@@ -37,6 +37,11 @@ php_sockets() {
   timeout -k 1 5 php -r 'exit(extension_loaded("sockets") ? 0 : 1);' 2>/dev/null
 }
 
+# Whether iconv is already available, built in or loaded.
+php_has_iconv() {
+  timeout -k 1 5 php -r 'exit(extension_loaded("iconv") ? 0 : 1);' 2>/dev/null
+}
+
 # Which php.ini is actually loaded, so the remedy names the real file.
 php_ini() {
   timeout -k 1 5 php -r 'echo php_ini_loaded_file() ?: "";' 2>/dev/null
@@ -60,16 +65,22 @@ resolve_cloud() {
 
 CLOUD_BIN=$(resolve_cloud)
 
-# Bound startup probes so a stalled executable cannot freeze setup.
-# How to invoke the CLI. The phar's requirement checker refuses to start when
-# PHP lacks the iconv extension; loading it on the command line fixes that.
+# How to invoke the CLI. The budget is generous because a cold start can go
+# through a mise shim before the phar even boots, and a probe that times out
+# is indistinguishable from a CLI that will not run -- which the panel then
+# reports as broken.
+#
+# The phar's requirement checker refuses to start when PHP lacks iconv, and
+# loading it on the command line fixes that. Only do so when iconv is really
+# missing: builds that compile it in have no iconv.so, so forcing the flag
+# makes every call emit a PHP startup warning that corrupts the JSON output.
 CLOUD_OK=0
 CLOUD_CMD=()
 if [[ -n $CLOUD_BIN ]]; then
-  if timeout -k 1 2 "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  if timeout -k 1 10 "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=("$CLOUD_BIN")
     CLOUD_OK=1
-  elif timeout -k 1 5 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
+  elif ! php_has_iconv && timeout -k 1 10 php -d extension=iconv "$CLOUD_BIN" --version >/dev/null 2>&1; then
     CLOUD_CMD=(php -d extension=iconv "$CLOUD_BIN")
     CLOUD_OK=1
   else
@@ -125,7 +136,7 @@ cloud_error_message() {
   printf '%s' "$msg"
 }
 
-# `cloud deploy` and `cloud deploy:monitor` refuse to run unless the current
+# `cloud deploy` refuses to run unless the current
 # directory has a Git remote; the deploy itself is driven purely by the
 # application/environment arguments. Keep a tiny per-app Git stub with the
 # app's repository as origin so the widget can deploy from anywhere.

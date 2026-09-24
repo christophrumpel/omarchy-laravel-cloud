@@ -32,7 +32,6 @@ Panel {
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string statusScript: pluginDir + "/bin/laravel-cloud-status"
   readonly property string deployScript: pluginDir + "/bin/laravel-cloud-deploy"
-  readonly property string monitorScript: pluginDir + "/bin/laravel-cloud-monitor"
   readonly property string setupScript: pluginDir + "/bin/laravel-cloud-setup"
   readonly property string cloudBin: String(setting("cloudBin", "") || "")
 
@@ -426,15 +425,6 @@ Panel {
       + " >/dev/null 2>&1")
     // Give the API a moment to register the deployment before polling.
     firstPollTimer.restart()
-  }
-
-  // Watch a deployment (or run one) with live output in a floating terminal.
-  function openMonitor(app, env) {
-    if (!root.bar || !app || !env) return
-    var cmd = cloudEnv() + Util.shellQuote(monitorScript) + " " + Util.shellQuote(app.name) + " " + Util.shellQuote(env.name)
-      + " " + Util.shellQuote(app.slug || app.name) + " " + Util.shellQuote(app.repositoryFullName || "")
-      + " " + Util.shellQuote(tokenIndexArg(app))
-    root.bar.run("omarchy-launch-floating-terminal-with-presentation " + cmd)
   }
 
   function deployFinished(envId) {
@@ -948,14 +938,6 @@ Panel {
                           text: envRow.deploying ? "Deployment in progress" : "Deploy " + (appBlock.app.name || "") + " / " + (envRow.env.name || "")
                           fontFamily: root.fontFamily
                         }
-                      }
-
-                      PanelActionButton {
-                        iconText: "󰆍"  // nf-md-console
-                        tooltipText: "Watch deployment in a terminal"
-                        foreground: root.foreground
-                        fontFamily: root.fontFamily
-                        onClicked: root.openMonitor(appBlock.app, envRow.env)
                       }
 
                       PanelActionButton {

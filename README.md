@@ -103,12 +103,11 @@ colour when the latest deployment of any environment failed.
 ## Panel
 
 Every application is listed with its environments. Per environment you see the
-status, the latest deployment (time, branch, commit) and four actions:
+status, the latest deployment (time, branch, commit) and three actions:
 
 - **Rocket: deploy.** Click once to arm (*Deploy?*), click again to confirm.
   Runs `cloud deploy <app> <env>` detached from the shell, sends a desktop
   notification when it finishes and refreshes the widget.
-- **Terminal:** `cloud deploy:monitor <app> <env>` in a floating terminal.
 - **Globe:** open the environment URL.
 - **Cloud:** open the environment in the Laravel Cloud dashboard.
 
@@ -132,7 +131,7 @@ Omarchy plugins run unsandboxed inside `omarchy-shell`, so here is the full
 list of what this one touches:
 
 - **Runs** the `cloud` CLI (`application:list`, `deployment:list`, `deploy`,
-  `deploy:monitor`, and `auth` when you click *Sign in*). The CLI talks to
+  and `auth` when you click *Sign in*). The CLI talks to
   the Laravel Cloud API over HTTPS. Nothing else on the network is contacted.
 - **Checks** for `php`, `composer`, and `cloud`; **copies commands** via `wl-copy`.
   Adds existing mise shims (`~/.local/share/mise/shims`) and `~/.local/bin`
@@ -159,7 +158,6 @@ two-click arm/confirm on the rocket button is the only safeguard.
 - `BarWidget.qml` / `Panel.qml`: the bar button and the popup.
 - `bin/laravel-cloud-status`: builds the JSON snapshot (`--cached` reads the last one).
 - `bin/laravel-cloud-deploy`: deploy, wait, notify, refresh.
-- `bin/laravel-cloud-monitor`: `cloud deploy:monitor` for the terminal button.
 - `bin/laravel-cloud-setup`: only runs `cloud auth` for the sign-in button.
 - `bin/laravel-cloud-lib`: shared helpers.
 
