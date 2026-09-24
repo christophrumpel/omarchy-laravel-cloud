@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "christophrumpel.laravel-cloud",
   "name": "Laravel Cloud",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "Christoph Rumpel",
   "license": "MIT",
   "description": "Laravel Cloud applications, environments and deployments in the Omarchy bar. Deploy, watch and open your apps without leaving the desktop.",
